@@ -106,7 +106,7 @@
                     </button>
                     <button id="trainButton" class="px-6 py-3 bg-green-600 text-white font-semibold rounded-lg shadow-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 transition duration-150 ease-in-out">
                         <svg class="w-5 h-5 inline-block mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-                        학습 시작 (100 Epochs)
+                        학습 시작 (손실 < 0.03 또는 최대 1000 Epoch)
                     </button>
                 </div>
                 <div id="status-message" class="text-center mt-4 text-sm font-medium text-gray-600"></div>
@@ -135,9 +135,11 @@
 
         // Neural Network model variables
         let model = {}; // Stores weights, biases, and architecture
-        const initialLearningRate = 0.8; // 초기 학습률 (높게 설정)
+        const initialLearningRate = 3.2; // 초기 학습률 (0.8에서 3.2로 4배 증가)
         const decayRate = 0.01;        // 학습률 감소율
-        const epochs = 100;
+        const maxEpochsOverall = 1000;  // 손실 목표 미달성 시 최대 Epoch 횟수
+        const minEpochsToRunAfterConvergence = 100; // 손실 목표 달성 시 최소 Epoch 횟수
+        const minLossThreshold = 0.03; // 손실 목표치
         let isTraining = false;
 
         // UI Elements
@@ -362,7 +364,7 @@
                             const b = model.biases[`b_h1_${j}`];
                             const z_h = w * inputX + b;
                             z_values[`z_h${j}`] = z_h;
-                            hidden_a_values.push(sigmoid(z_h)); // Sigmoid activation for hidden layer
+                            hidden_a_values.push(sigmoid(z_h)); // Hidden layer always sigmoid
                         }
 
                         let sumHiddenOutputs = 0;
@@ -564,23 +566,48 @@
             nnSelector.disabled = true;
             statusMessageDiv.textContent = '학습을 시작합니다...';
 
-            for (let i = 0; i < epochs; i++) {
-                // Calculate decaying learning rate for the current epoch
-                const currentLearningRate = initialLearningRate * (1 / (1 + decayRate * i));
-                const loss = trainEpoch(currentLearningRate); // Pass current learning rate to trainEpoch
+            let currentEpoch = 0;
+            let currentLoss = Infinity;
+            let lossThresholdReachedEpoch = -1; // Epoch when loss first dropped below threshold
 
-                drawPlot(); // Update plot after each epoch
-                statusMessageDiv.textContent = `학습 중... Epoch: ${i + 1}/${epochs}, Loss: ${loss.toFixed(4)}`;
-                // Use a small delay to visualize the training process
+            while (true) {
+                const currentLearningRate = initialLearningRate * (1 / (1 + decayRate * currentEpoch));
+                currentLoss = trainEpoch(currentLearningRate);
+
+                drawPlot();
+                statusMessageDiv.textContent = `학습 중... Epoch: ${currentEpoch + 1}, Loss: ${currentLoss.toFixed(4)}`;
                 await new Promise(resolve => setTimeout(resolve, 50));
+
+                if (currentLoss <= minLossThreshold && lossThresholdReachedEpoch === -1) {
+                    lossThresholdReachedEpoch = currentEpoch; // Record the epoch when threshold was first reached
+                }
+
+                currentEpoch++; // Increment epoch after processing
+
+                // Stopping conditions
+                if (lossThresholdReachedEpoch !== -1) {
+                    // If loss has been met, continue until 100 epochs are done (total epochs)
+                    if (currentEpoch >= minEpochsToRunAfterConvergence) {
+                        break;
+                    }
+                } else {
+                    // If loss has NOT been met, continue up to maxEpochsOverall (1000)
+                    if (currentEpoch >= maxEpochsOverall) {
+                        break;
+                    }
+                }
             }
 
             isTraining = false;
             trainButton.disabled = false;
             initializeButton.disabled = false;
             nnSelector.disabled = false;
-            // Calculate final loss with the last epoch's learning rate
-            statusMessageDiv.textContent = `학습 완료! 최종 Loss: ${trainEpoch(initialLearningRate * (1 / (1 + decayRate * (epochs - 1)))).toFixed(4)}`;
+
+            if (currentLoss <= minLossThreshold) {
+                statusMessageDiv.textContent = `학습 완료! 목표 손실(${minLossThreshold}) 달성! 최종 Loss: ${currentLoss.toFixed(4)}, Epochs: ${currentEpoch}`;
+            } else {
+                statusMessageDiv.textContent = `학습 완료! 최대 Epoch(${maxEpochsOverall}) 도달. 최종 Loss: ${currentLoss.toFixed(4)}`;
+            }
         }
 
         // --- Initialization ---
