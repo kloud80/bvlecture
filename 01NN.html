@@ -21,7 +21,7 @@
         }
         /* Custom styles for neuron and connection visualization */
         .neuron {
-            background-color: #63b3ed; /* Blue for neurons */
+            background-color: #63b3ed; /* Default Blue for neurons */
             border-radius: 9999px; /* Fully rounded */
             width: 40px;
             height: 40px;
@@ -31,6 +31,8 @@
             color: white;
             font-weight: bold;
             box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            transition: background-color 0.3s ease, color 0.3s ease; /* Smooth transition for color change */
+            font-size: 0.8rem; /* Adjust font size for values */
         }
         .connection {
             height: 2px;
@@ -45,6 +47,11 @@
             color: white;
             font-size: 0.875rem;
             box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        /* Style for active selected data row */
+        .data-row-active {
+            background-color: #e0f2fe; /* Light blue background for active row */
+            font-weight: bold;
         }
     </style>
 </head>
@@ -106,7 +113,7 @@
                     </button>
                     <button id="trainButton" class="px-6 py-3 bg-green-600 text-white font-semibold rounded-lg shadow-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 transition duration-150 ease-in-out">
                         <svg class="w-5 h-5 inline-block mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-                        학습 시작 (손실 < 0.03 또는 최대 1000 Epoch)
+                        학습 시작 (100 Epochs)
                     </button>
                 </div>
                 <div id="status-message" class="text-center mt-4 text-sm font-medium text-gray-600"></div>
@@ -135,12 +142,15 @@
 
         // Neural Network model variables
         let model = {}; // Stores weights, biases, and architecture
-        const initialLearningRate = 3.2; // 초기 학습률 (0.8에서 3.2로 4배 증가)
+        const initialLearningRate = 3.2; // 초기 학습률
         const decayRate = 0.01;        // 학습률 감소율
-        const maxEpochsOverall = 1000;  // 손실 목표 미달성 시 최대 Epoch 횟수
-        const minEpochsToRunAfterConvergence = 100; // 손실 목표 달성 시 최소 Epoch 횟수
-        const minLossThreshold = 0.03; // 손실 목표치
+        const maxEpochs = 100;         // 최대 Epoch 횟수
+        const minLossThreshold = 0.01; // 손실 목표치
+
+        const dropoutRate = 0; // 드롭아웃 비율 (0으로 설정하여 드롭아웃 제거)
+
         let isTraining = false;
+        let selectedDataRow = null; // To keep track of the currently selected data row
 
         // UI Elements
         const dataListBody = document.getElementById('data-list');
@@ -182,11 +192,29 @@
             return sumSquaredErrors / data.length;
         }
 
-        // Function to create a neuron visualization element
-        function createNeuronDiv(label) {
+        /**
+         * Returns an RGB color string interpolated between blue (0) and red (1).
+         * @param {number} value - Activation value between 0 and 1.
+         * @returns {string} RGB color string (e.g., "rgb(0, 0, 255)").
+         */
+        function getColorForActivation(value) {
+            // Ensure value is clamped between 0 and 1
+            const clampedValue = Math.max(0, Math.min(1, value)); // Fixed: Missing closing parenthesis
+            const r = Math.floor(clampedValue * 255);
+            const b = Math.floor((1 - clampedValue) * 255);
+            const g = 0; // Keeping green at 0 for a strong blue-to-red gradient
+            return `rgb(${r}, ${g}, ${b})`;
+        }
+
+
+        // Function to create a neuron visualization element with an ID
+        function createNeuronDiv(label, id) {
             const div = document.createElement('div');
             div.className = 'neuron flex-shrink-0';
             div.textContent = label;
+            if (id) {
+                div.id = id; // Assign ID
+            }
             return div;
         }
 
@@ -278,6 +306,7 @@
                     model.outputActivation = 'sigmoid'; // Changed to sigmoid
                     break;
             }
+            // Reset neuron display when model is initialized or changed
             updateNNVisualization();
             drawPlot(); // Redraw plot with new initialized prediction line
             statusMessageDiv.textContent = '모델이 성공적으로 초기화되었습니다.';
@@ -285,34 +314,38 @@
 
         /**
          * Performs a forward pass through the neural network for a given input X.
-         * Returns the predicted Y value.
+         * Returns an object containing the predicted Y value and all intermediate neuron activations.
+         * Dropout is NOT applied during prediction/inference for visualization.
+         * @param {number} inputX - The input value for the neural network.
+         * @returns {{outputY: number, activations: Object}} - The predicted Y and a map of activations.
          */
         function predict(inputX) {
             if (!model || !model.type) {
-                console.error("Model not initialized.");
-                return 0;
+                return { outputY: 0, activations: {} };
             }
 
+            let activations = {}; // Store all activations
             let hiddenOutputs = [];
             let outputZ;
             let outputY;
 
             switch (model.type) {
                 case 'NN1':
-                    // Input -> Neuron 1 (sigmoid) -> Output
                     const z1_1 = model.weights.w1_1 * inputX + model.biases.b1_1;
                     outputY = sigmoid(z1_1);
+                    activations['N1'] = outputY; // For NN1, N1 is the output neuron
                     break;
                 case 'NN2':
                 case 'NN3':
-                case 'NN4': // NN4 now also uses hidden layers with sigmoid and sigmoid output
-                    // Hidden layer calculation
-                    const hiddenNeurons = (model.type === 'NN2') ? 2 : (model.type === 'NN3' ? 3 : 4); // 4 for NN4
+                case 'NN4':
+                    const hiddenNeurons = (model.type === 'NN2') ? 2 : (model.type === 'NN3' ? 3 : 4);
                     for (let i = 1; i <= hiddenNeurons; i++) {
                         const w = model.weights[`w_h1_${i}`];
                         const b = model.biases[`b_h1_${i}`];
                         const z_h = w * inputX + b;
-                        hiddenOutputs.push(sigmoid(z_h)); // Hidden layer always sigmoid
+                        const hidden_a = sigmoid(z_h);
+                        hiddenOutputs.push(hidden_a);
+                        activations[`H${i}`] = hidden_a; // Store hidden activations
                     }
 
                     // Output layer calculation
@@ -327,15 +360,18 @@
                     } else if (model.outputActivation === 'linear') {
                         outputY = linear(outputZ);
                     }
+                    activations['O1'] = outputY; // Store output activation
                     break;
             }
-            return outputY;
+            activations['Y_hat'] = outputY; // Final predicted output (useful for consistency)
+            return { outputY: outputY, activations: activations };
         }
 
         /**
          * Trains the neural network using backpropagation for a single epoch.
          * Updates weights and biases.
          * Returns the mean squared error for the epoch.
+         * Dropout is applied here if dropoutRate > 0.
          * @param {number} currentLearningRate - 현재 Epoch에서 사용할 학습률
          */
         function trainEpoch(currentLearningRate) {
@@ -347,9 +383,11 @@
 
                 let predictedY;
                 let z_values = {}; // Store z values for derivatives (pre-activation)
-                let hidden_a_values = []; // Store activated hidden layer outputs
+                let hidden_a_values_processed = []; // Activated hidden layer outputs (with/without dropout)
+                let hidden_z_values_raw = []; // Store raw z values for hidden layer derivatives
+                let hiddenDropoutMask = []; // Mask to apply dropout during training
 
-                // --- Forward Pass ---
+                // --- Forward Pass (with Dropout for Hidden Layers if dropoutRate > 0) ---
                 switch (model.type) {
                     case 'NN1':
                         z_values.z1_1 = model.weights.w1_1 * inputX + model.biases.b1_1;
@@ -357,19 +395,33 @@
                         break;
                     case 'NN2':
                     case 'NN3':
-                    case 'NN4': // NN4 now also uses hidden layers with sigmoid and sigmoid output
-                        const hiddenNeurons = (model.type === 'NN2') ? 2 : (model.type === 'NN3' ? 3 : 4); // 4 for NN4
+                    case 'NN4':
+                        const hiddenNeurons = (model.type === 'NN2') ? 2 : (model.type === 'NN3' ? 3 : 4);
+                        const keep_prob = 1 - dropoutRate;
+
                         for (let j = 1; j <= hiddenNeurons; j++) {
                             const w = model.weights[`w_h1_${j}`];
                             const b = model.biases[`b_h1_${j}`];
                             const z_h = w * inputX + b;
-                            z_values[`z_h${j}`] = z_h;
-                            hidden_a_values.push(sigmoid(z_h)); // Hidden layer always sigmoid
+                            hidden_z_values_raw.push(z_h); // Store raw z for derivative calculation later
+
+                            const activated_output = sigmoid(z_h);
+
+                            if (dropoutRate > 0) { // Apply dropout only if dropoutRate is greater than 0
+                                const isActive = Math.random() < keep_prob;
+                                hiddenDropoutMask.push(isActive ? 1 : 0);
+                                // Inverted dropout: scale active neurons
+                                hidden_a_values_processed.push(isActive ? activated_output / keep_prob : 0);
+                            } else {
+                                hiddenDropoutMask.push(1); // Keep all active if no dropout
+                                hidden_a_values_processed.push(activated_output);
+                            }
                         }
 
+                        // Output layer calculation using processed hidden outputs
                         let sumHiddenOutputs = 0;
                         for (let j = 0; j < hiddenNeurons; j++) {
-                            sumHiddenOutputs += model.weights[`w_o1_${j + 1}`] * hidden_a_values[j];
+                            sumHiddenOutputs += model.weights[`w_o1_${j + 1}`] * hidden_a_values_processed[j];
                         }
                         z_values.z_o = sumHiddenOutputs + model.biases.b_o1_1;
 
@@ -392,8 +444,8 @@
                 if (model.type === 'NN1') {
                     // For NN1, the output layer IS the only layer
                     outputDelta = error * sigmoidDerivative(z_values.z1_1);
-                    model.weights.w1_1 += currentLearningRate * outputDelta * inputX; // Use currentLearningRate
-                    model.biases.b1_1 += currentLearningRate * outputDelta; // Use currentLearningRate
+                    model.weights.w1_1 += currentLearningRate * outputDelta * inputX;
+                    model.biases.b1_1 += currentLearningRate * outputDelta;
                 } else {
                     // For multi-layer NNs (NN2, NN3, NN4)
                     let outputActivationDerivative;
@@ -405,25 +457,27 @@
                     outputDelta = error * outputActivationDerivative;
 
                     // Update output layer weights and bias
-                    const hiddenNeurons = (model.type === 'NN2') ? 2 : (model.type === 'NN3' ? 3 : 4); // 4 for NN4
+                    const hiddenNeurons = (model.type === 'NN2') ? 2 : (model.type === 'NN3' ? 3 : 4);
                     for (let j = 1; j <= hiddenNeurons; j++) {
-                        model.weights[`w_o1_${j}`] += currentLearningRate * outputDelta * hidden_a_values[j - 1]; // Use currentLearningRate
+                        // Use processed hidden_a_values_processed for weights coming *from* hidden layer
+                        model.weights[`w_o1_${j}`] += currentLearningRate * outputDelta * hidden_a_values_processed[j - 1];
                     }
-                    model.biases.b_o1_1 += currentLearningRate * outputDelta; // Use currentLearningRate
+                    model.biases.b_o1_1 += currentLearningRate * outputDelta;
 
                     // Calculate hidden layer error (backpropagate output delta)
                     let hiddenDeltas = [];
                     for (let j = 1; j <= hiddenNeurons; j++) {
-                        // Sum of (weight from this hidden neuron to output * output_delta)
+                        // error_term_for_hidden: Sum of (weight from this hidden neuron to output * output_delta)
                         const error_term_for_hidden = model.weights[`w_o1_${j}`] * outputDelta;
-                        const hidden_delta = error_term_for_hidden * sigmoidDerivative(z_values[`z_h${j}`]);
+                        // Apply dropout mask to the derivative of the hidden layer activation
+                        const hidden_delta = error_term_for_hidden * sigmoidDerivative(hidden_z_values_raw[j - 1]) * hiddenDropoutMask[j - 1];
                         hiddenDeltas.push(hidden_delta);
                     }
 
                     // Update hidden layer weights and biases
-                    for (let j = 1; j <= hiddenNeurons; j++) {
-                        model.weights[`w_h1_${j}`] += currentLearningRate * hiddenDeltas[j - 1] * inputX; // Use currentLearningRate
-                        model.biases[`b_h1_${j}`] += currentLearningRate * hiddenDeltas[j - 1]; // Use currentLearningRate
+                    for (let j = 1; j <= hiddenNeurons; j++) { // Fixed: Changed `j => hiddenNeurons` to `j <= hiddenNeurons`
+                        model.weights[`w_h1_${j}`] += currentLearningRate * hiddenDeltas[j - 1] * inputX;
+                        model.biases[`b_h1_${j}`] += currentLearningRate * hiddenDeltas[j - 1];
                     }
                 }
             }
@@ -474,7 +528,8 @@
                 // Generate 100 points to draw a smooth line
                 for (let i = 0; i <= 100; i++) {
                     const x = minX + (maxX - minX) * (i / 100);
-                    const y_pred = predict(x);
+                    // Use predict().outputY as predict now returns an object
+                    const y_pred = predict(x).outputY;
                     plotPoints.push({ x: xScale(x), y: yScale(y_pred) });
                 }
 
@@ -495,9 +550,10 @@
          */
         function populateDataList() {
             dataListBody.innerHTML = '';
-            data.forEach(d => {
+            data.forEach((d, index) => {
                 const row = dataListBody.insertRow();
-                row.className = 'hover:bg-gray-50'; // Add hover effect
+                row.className = 'hover:bg-gray-50 cursor-pointer'; // Add hover effect and cursor
+                row.setAttribute('data-index', index); // Add data index for retrieval
                 const xCell = row.insertCell();
                 xCell.className = 'px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900';
                 xCell.textContent = d.x.toFixed(2);
@@ -509,6 +565,7 @@
 
         /**
          * Updates the visual representation of the neural network structure.
+         * Assigns IDs to neuron divs for easy access.
          */
         function updateNNVisualization() {
             nnVisualizationDiv.innerHTML = ''; // Clear previous visualization
@@ -516,37 +573,90 @@
             const selectedNN = nnSelector.value;
             const visualizationElements = [];
 
-            // Input Layer
+            // Input Layer - No ID needed for 'X' as it's not an activation to display
             visualizationElements.push(createNeuronDiv('X'));
             visualizationElements.push(createConnectionDiv());
 
             if (selectedNN === 'NN1') {
                 // NN1: Input -> Neuron (Sigmoid) -> Output
-                visualizationElements.push(createNeuronDiv('N1'));
+                visualizationElements.push(createNeuronDiv('N1', 'neuron-N1')); // Assign ID
                 visualizationElements.push(createActivationDiv('Sigmoid'));
             } else {
                 // Hidden Layer (NN2, NN3, NN4)
-                const numHiddenNeurons = (selectedNN === 'NN2') ? 2 : (selectedNN === 'NN3' ? 3 : 4); // 4 for NN4
+                const numHiddenNeurons = (selectedNN === 'NN2') ? 2 : (selectedNN === 'NN3' ? 3 : 4);
                 const hiddenNeuronsDiv = document.createElement('div');
                 hiddenNeuronsDiv.className = 'flex flex-col gap-2 items-center';
                 for (let i = 1; i <= numHiddenNeurons; i++) {
-                    hiddenNeuronsDiv.appendChild(createNeuronDiv(`H${i}`));
+                    hiddenNeuronsDiv.appendChild(createNeuronDiv(`H${i}`, `neuron-H${i}`)); // Assign ID
                 }
                 visualizationElements.push(hiddenNeuronsDiv);
                 visualizationElements.push(createActivationDiv('Sigmoid'));
                 visualizationElements.push(createConnectionDiv());
 
                 // Output Layer
-                visualizationElements.push(createNeuronDiv('O1'));
-                // Output activation is Sigmoid for NN2, NN3, and now NN4
-                visualizationElements.push(createActivationDiv('Sigmoid'));
+                visualizationElements.push(createNeuronDiv('O1', 'neuron-O1')); // Assign ID
+                visualizationElements.push(createActivationDiv(model.outputActivation === 'sigmoid' ? 'Sigmoid' : 'Linear'));
             }
 
             visualizationElements.push(createConnectionDiv());
-            visualizationElements.push(createNeuronDiv('Y_hat')); // Predicted Output
+            visualizationElements.push(createNeuronDiv('Y_hat', 'neuron-Y_hat')); // Assign ID for final output
 
             visualizationElements.forEach(el => nnVisualizationDiv.appendChild(el));
         }
+
+        /**
+         * Displays activation values on the neuron nodes and colors them.
+         * @param {{x: number, y: number}} dataPoint - The selected data point.
+         */
+        function displayNeuronActivations(dataPoint) {
+            if (!model || !model.type) {
+                console.warn("Model not initialized. Cannot display activations.");
+                return;
+            }
+
+            // First, reset the visualization to default labels/colors
+            updateNNVisualization();
+
+            const predictionResult = predict(dataPoint.x);
+            const activations = predictionResult.activations;
+
+            // Update N1 for NN1
+            if (model.type === 'NN1') {
+                const neuronN1 = document.getElementById('neuron-N1');
+                if (neuronN1) {
+                    const activationValue = activations['N1'];
+                    neuronN1.textContent = activationValue.toFixed(4);
+                    neuronN1.style.backgroundColor = getColorForActivation(activationValue);
+                }
+            } else {
+                // Update Hidden Layer neurons (H1, H2, H3, H4)
+                const hiddenNeurons = (model.type === 'NN2') ? 2 : (model.type === 'NN3' ? 3 : 4);
+                for (let i = 1; i <= hiddenNeurons; i++) {
+                    const neuronH = document.getElementById(`neuron-H${i}`);
+                    if (neuronH) {
+                        const activationValue = activations[`H${i}`];
+                        neuronH.textContent = activationValue.toFixed(4);
+                        neuronH.style.backgroundColor = getColorForActivation(activationValue);
+                    }
+                }
+                // Update Output Layer neuron (O1)
+                const neuronO1 = document.getElementById('neuron-O1');
+                if (neuronO1) {
+                    const activationValue = activations['O1'];
+                    neuronO1.textContent = activationValue.toFixed(4);
+                    neuronO1.style.backgroundColor = getColorForActivation(activationValue);
+                }
+            }
+
+            // Update Y_hat (final output)
+            const neuronYHat = document.getElementById('neuron-Y_hat');
+            if (neuronYHat) {
+                const activationValue = activations['Y_hat'];
+                neuronYHat.textContent = activationValue.toFixed(4);
+                neuronYHat.style.backgroundColor = getColorForActivation(activationValue);
+            }
+        }
+
 
         // --- Event Handlers ---
 
@@ -564,38 +674,28 @@
             trainButton.disabled = true;
             initializeButton.disabled = true;
             nnSelector.disabled = true;
+
+            // Reset neuron display when training starts
+            updateNNVisualization();
+            if (selectedDataRow) { // Clear active row highlight
+                selectedDataRow.classList.remove('data-row-active');
+                selectedDataRow = null;
+            }
+
             statusMessageDiv.textContent = '학습을 시작합니다...';
 
             let currentEpoch = 0;
             let currentLoss = Infinity;
-            let lossThresholdReachedEpoch = -1; // Epoch when loss first dropped below threshold
 
-            while (true) {
+            while (currentEpoch < maxEpochs) {
                 const currentLearningRate = initialLearningRate * (1 / (1 + decayRate * currentEpoch));
                 currentLoss = trainEpoch(currentLearningRate);
 
                 drawPlot();
-                statusMessageDiv.textContent = `학습 중... Epoch: ${currentEpoch + 1}, Loss: ${currentLoss.toFixed(4)}`;
+                statusMessageDiv.textContent = `학습 중... Epoch: ${currentEpoch + 1}/${maxEpochs}, Loss: ${currentLoss.toFixed(4)}`;
                 await new Promise(resolve => setTimeout(resolve, 50));
 
-                if (currentLoss <= minLossThreshold && lossThresholdReachedEpoch === -1) {
-                    lossThresholdReachedEpoch = currentEpoch; // Record the epoch when threshold was first reached
-                }
-
                 currentEpoch++; // Increment epoch after processing
-
-                // Stopping conditions
-                if (lossThresholdReachedEpoch !== -1) {
-                    // If loss has been met, continue until 100 epochs are done (total epochs)
-                    if (currentEpoch >= minEpochsToRunAfterConvergence) {
-                        break;
-                    }
-                } else {
-                    // If loss has NOT been met, continue up to maxEpochsOverall (1000)
-                    if (currentEpoch >= maxEpochsOverall) {
-                        break;
-                    }
-                }
             }
 
             isTraining = false;
@@ -606,7 +706,7 @@
             if (currentLoss <= minLossThreshold) {
                 statusMessageDiv.textContent = `학습 완료! 목표 손실(${minLossThreshold}) 달성! 최종 Loss: ${currentLoss.toFixed(4)}, Epochs: ${currentEpoch}`;
             } else {
-                statusMessageDiv.textContent = `학습 완료! 최대 Epoch(${maxEpochsOverall}) 도달. 최종 Loss: ${currentLoss.toFixed(4)}`;
+                statusMessageDiv.textContent = `학습 완료! 최대 Epoch(${maxEpochs}) 도달. 최종 Loss: ${currentLoss.toFixed(4)}`;
             }
         }
 
@@ -619,9 +719,42 @@
             drawPlot(); // Initial draw of data points and prediction line
 
             // Event Listeners
-            nnSelector.addEventListener('change', initializeModel); // Re-initialize model on architecture change
-            initializeButton.addEventListener('click', initializeModel);
+            nnSelector.addEventListener('change', () => {
+                initializeModel();
+                // Clear active row highlight when NN structure changes
+                if (selectedDataRow) {
+                    selectedDataRow.classList.remove('data-row-active');
+                    selectedDataRow = null;
+                }
+            });
+            initializeButton.addEventListener('click', () => {
+                initializeModel();
+                // Clear active row highlight when initialized
+                if (selectedDataRow) {
+                    selectedDataRow.classList.remove('data-row-active');
+                    selectedDataRow = null;
+                }
+            });
             trainButton.addEventListener('click', handleTrain);
+
+            // Event listener for data list rows
+            dataListBody.addEventListener('click', (event) => {
+                let targetRow = event.target.closest('tr');
+                if (targetRow && targetRow.parentElement === dataListBody) {
+                    // Remove highlight from previously selected row
+                    if (selectedDataRow) {
+                        selectedDataRow.classList.remove('data-row-active');
+                    }
+                    // Add highlight to the newly selected row
+                    targetRow.classList.add('data-row-active');
+                    selectedDataRow = targetRow;
+
+                    const dataIndex = parseInt(targetRow.getAttribute('data-index'));
+                    const selectedDataPoint = data[dataIndex];
+                    displayNeuronActivations(selectedDataPoint);
+                }
+            });
+
 
             // Responsive canvas resizing
             function resizeCanvas() {
